@@ -1,154 +1,196 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from mpl_toolkits.basemap import Basemap
-from mpl_toolkits.axes_grid1 import make_axes_locatable
+import os
+os.environ['PROJ_LIB'] = '/home/etsu/miniconda2/envs/particles/share/proj'
+
+import logging
+import pandas as pd
 from scipy.interpolate import LinearNDInterpolator
 from pyproj import transform, Proj
-# тут какой-то баг, переменная окружения не добавляется, добавим ее вручную
-import os
-os.environ['PROJ_LIB'] = '~/miniconda3/envs/anaconda/share/proj/'
 
-# зададим константы
-FILENAME = 'anim.gif'
-NUM_PARTICLES = 100
-NUM_ITER = 50
-STEP = 600  # sec
+from particles.save import save_animation, save_csv
+from particles.state import *
+from particles.utils import transform_states, get_point_types, type_colors, Continent
+
+# Настроим логгирование
+logger = logging.getLogger('main')
+logger.setLevel(logging.DEBUG)
+ch = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+logger.addHandler(ch)
+
+# Зададим константы
+NUM_ITER = 24*4
+STEP = 3600  # с
 SEED = 42
 
+Uw, Vw = 100, 100  # см/с
+W = np.array([Uw, Vw]).reshape(2, 1)
 
-# системы координат
-wgs84 = Proj(init="EPSG:4326")
-local_crs = Proj(init="EPSG:2463")
-
-
-def init_state(bounds, num_particles, seed=None):
-    """Инициализация состояния системы"""
-    x_min, y_min, x_max, y_max = bounds
-    rs = np.random.RandomState(seed)
-    x = rs.uniform(x_min, x_max, num_particles)
-    y = rs.uniform(y_min, y_max, num_particles)
-    xy = np.vstack([x, y]).T
-    velocity = get_velocity(xy)
-    return np.hstack([xy, velocity])
+# Системы координат
+WGS84_CRS = Proj(init="EPSG:4326")
+LOCAL_CRS = Proj(init="EPSG:2463")
 
 
-def get_state(state_prev, step):
-    """Получает текущее состояние по предыдущему"""
-    xy_prev = state_prev[:, :2]
-    velocity_prev = state_prev[:, 2:]
-    xy_cur = xy_prev + step*velocity_prev
-    velocity_cur = get_velocity(xy_cur)
-    states_cur = np.hstack([xy_cur, velocity_cur])
-    return states_cur
+CONTINENT_BUFFER = 5000  # м
 
 
-def to_local(lonlat):
-    """Конвертация в wgs84"""
-    if np.isnan(lonlat).any():
-        return np.ones(2)*np.nan
-    return transform(wgs84, local_crs, lonlat[0], lonlat[1])
+def main_1():
+    logger.debug(
+        '\n#############################\n'
+        'Параметры:\n'
+        '  Число итераций:\t{}\n'
+        '  Шаг итерации, сек:\t{}\n'
+        '#############################'.format(NUM_ITER, STEP)
+    )
+    logger.debug('Готовим данные для модели')
+    lonlat, current_velocity = get_current_data('6.csv')
+    # Конвертируем в метры
+    xy = np.vstack(transform(WGS84_CRS, LOCAL_CRS, lonlat[:, 0], lonlat[:, 1])).T
+    # Получим границы данных
+    bounds = np.hstack([xy.min(axis=0), xy.max(axis=0)])
+    bounds_lonlat = np.hstack([lonlat.min(axis=0), lonlat.max(axis=0)])
+    # Создадим функцию интерполяции данных
+    interpolate_current_velocity = LinearNDInterpolator(xy, current_velocity)
+    # Получим типы точек
+    point_types = get_point_types('Particles 1.xlsx')
+
+    logger.debug('Запускаем симуляцию')
+    states = run(
+        init_state_func=init_state,
+        get_state_func=get_state_1,
+        current_velocity_func=interpolate_current_velocity,
+        point_types=point_types,
+        num_iter=NUM_ITER,
+        step=STEP,
+        bounds=bounds,
+        weights=W,
+        random_state=np.random.RandomState(SEED),
+    )
+
+    # Конвертируем в градусы
+    states = transform_states(states, LOCAL_CRS, WGS84_CRS)
+
+    logger.debug('Сохраняем анимацию')
+    save_animation('out1.mp4', lonlat, current_velocity, states, point_types, NUM_ITER, STEP)
+
+    logger.debug('Сохраняем результаты в файл')
+    save_csv('out1.csv', states, point_types, bounds_lonlat)
 
 
-def to_wgs84(xy):
-    """Конвертация в wgs84"""
-    if np.isnan(xy).any():
-        return np.ones(2)*np.nan
-    return transform(local_crs, wgs84, xy[0], xy[1])
+def main_2():
+    logger.debug(
+        '\n#############################\n'
+        'Параметры:\n'
+        '  Число итераций:\t{}\n'
+        '  Шаг итерации, сек:\t{}\n'
+        '  Ширина прибрежной зоны, м:\t{}\n'
+        '#############################'.format(NUM_ITER, STEP, CONTINENT_BUFFER)
+    )
+    logger.debug('Готовим данные для модели')
+    lonlat, current_velocity = get_current_data('6.csv')
+    # Конвертируем в метры
+    xy = np.vstack(transform(WGS84_CRS, LOCAL_CRS, lonlat[:, 0], lonlat[:, 1])).T
+    # Получим границы данных
+    bounds = np.hstack([xy.min(axis=0), xy.max(axis=0)])
+    bounds_lonlat = np.hstack([lonlat.min(axis=0), lonlat.max(axis=0)])
+    # Создадим функцию интерполяции данных
+    interpolate_current_velocity = LinearNDInterpolator(xy, current_velocity)
+    # Получим типы точек
+    point_types = get_point_types('Particles 2.xlsx')
+    # Добавим новые типы и сгенерируем заново цвета
+    new_point_types = point_types.copy()
+    new_point_types.index *= -1
+    new_point_types.number = 0
+    point_types = pd.concat([point_types, new_point_types], axis='rows')
+    point_types.reset_index(inplace=True)
+    point_types.color = type_colors(point_types.reset_index().type).values
+    point_types.set_index('type', inplace=True)
+
+    logger.debug('Запускаем симуляцию')
+    fragmentator = ParticleFragmentator(Continent(bounds_lonlat, CONTINENT_BUFFER, LOCAL_CRS), STEP)
+    states = run(
+        init_state_func=init_state,
+        get_state_func=get_state_2,
+        current_velocity_func=interpolate_current_velocity,
+        point_types=point_types,
+        num_iter=NUM_ITER,
+        step=STEP,
+        bounds=bounds,
+        weights=W,
+        random_state=np.random.RandomState(SEED),
+        fragmentator=fragmentator,
+    )
+
+    # Конвертируем в градусы
+    states = transform_states(states, LOCAL_CRS, WGS84_CRS)
+
+    logger.debug('Сохраняем анимацию')
+    save_animation('out2.mp4', lonlat, current_velocity, states, point_types, NUM_ITER, STEP)
+
+    logger.debug('Сохраняем результаты в файл')
+    save_csv('out2.csv', states, point_types, bounds_lonlat)
+
+
+def main_3():
+    logger.debug(
+        '\n#############################\n'
+        'Параметры:\n'
+        '  Число итераций:\t{}\n'
+        '  Шаг итерации, сек:\t{}\n'
+        '  Ширина прибрежной зоны, м:\t{}\n'
+        '#############################'.format(NUM_ITER, STEP, CONTINENT_BUFFER)
+    )
+    logger.debug('Готовим данные для модели')
+    lonlat, current_velocity = get_current_data('6.csv')
+    # Конвертируем в метры
+    xy = np.vstack(transform(WGS84_CRS, LOCAL_CRS, lonlat[:, 0], lonlat[:, 1])).T
+    # Получим границы данных
+    bounds = np.hstack([xy.min(axis=0), xy.max(axis=0)])
+    bounds_lonlat = np.hstack([lonlat.min(axis=0), lonlat.max(axis=0)])
+    # Создадим функцию интерполяции данных
+    interpolate_current_velocity = LinearNDInterpolator(xy, current_velocity)
+    # Получим типы точек
+    point_types = get_point_types('Particles 2.xlsx')
+    # Добавим новые типы и сгенерируем заново цвета
+    new_point_types = point_types.copy()
+    new_point_types.index *= -1
+    new_point_types.number = 0
+    point_types = pd.concat([point_types, new_point_types], axis='rows')
+    point_types.reset_index(inplace=True)
+    point_types.color = type_colors(point_types.reset_index().type).values
+    point_types.set_index('type', inplace=True)
+
+    logger.debug('Запускаем симуляцию')
+    desintegrator = Desintegrator(Continent(bounds_lonlat, CONTINENT_BUFFER, LOCAL_CRS), STEP)
+    states = run(
+        init_state_func=init_state,
+        get_state_func=get_state_3,
+        current_velocity_func=interpolate_current_velocity,
+        point_types=point_types,
+        num_iter=NUM_ITER,
+        step=STEP,
+        bounds=bounds,
+        weights=W,
+        random_state=np.random.RandomState(SEED),
+        desintegrator=desintegrator,
+    )
+
+    # Конвертируем в градусы
+    states = transform_states(states, LOCAL_CRS, WGS84_CRS)
+
+    logger.debug('Сохраняем анимацию')
+    save_animation('out3.mp4', lonlat, current_velocity, states, point_types, NUM_ITER, STEP)
+
+    logger.debug('Сохраняем результаты в файл')
+    save_csv('out3.csv', states, point_types, bounds_lonlat)
 
 
 if __name__ == '__main__':
-    # получаем данные из файла
-    data = np.genfromtxt('data.csv', delimiter=',')
-    data[data==-999] = np.nan
-    lonlat, velocity = data[:, :2], data[:, 2:]
-    xy = np.apply_along_axis(
-        func1d=to_local,
-        axis=1,
-        arr=lonlat
-    )
-    
-    # создадим функцию интерполяции данных
-    get_velocity = LinearNDInterpolator(xy, velocity)
-    
-    # получим гранницы данных
-    bounds = np.hstack([xy.min(axis=0), xy.max(axis=0)])
-    bounds_lonlat = np.hstack([lonlat.min(axis=0), lonlat.max(axis=0)])
-    
-    # рассчитаем состояние системы на каждой итерации для каждой частицы
-    # state - 3-мерный массив [NUM_ITER х NUM_PARTICLES х 4]
-    # по последней оси размерностью 4 храним X, Y, Vx, Vy
-    states = np.ones([NUM_ITER, NUM_PARTICLES, 4], dtype=float) * np.nan
-    states[0, :, :] = init_state(bounds, NUM_PARTICLES, seed=SEED)
-    for n in range(1, NUM_ITER):
-        states[n, :, :] = get_state(states[n-1, :, :], STEP)
-    
-    # сейчас координаты в states мы рассчитали в метрах
-    # переведем их в wgs84, чтобы отобразить на карте
-    for i in range(states.shape[0]):
-        states[i, :, :2] = np.apply_along_axis(
-            func1d=to_wgs84,
-            axis=1,
-            arr=states[i, :, :2]
-        )
-    
-    # создаем рисунок
-    fig, ax = plt.subplots(figsize=(8,2))
+    # logger.info('Блок 1')
+    # main_1()
 
-    # добавляем континенты
-    m = Basemap(
-        llcrnrlon=bounds_lonlat[0]-0.03,
-        llcrnrlat=bounds_lonlat[1]-0.03,
-        urcrnrlon=bounds_lonlat[2]+0.03,
-        urcrnrlat=bounds_lonlat[3]+0.03,
-        epsg="4326",
-        resolution='h',
-    )
-    m.drawcoastlines()
-    m.fillcontinents()
-    m.drawmapboundary()
+    # logger.info('Блок 2')
+    # main_2()
 
-    # добавляем поле скоростей
-    q = ax.quiver(
-        lonlat[:, 0],
-        lonlat[:, 1],
-        velocity[:, 0],
-        velocity[:, 1],
-        np.linalg.norm(velocity, axis=1),
-        scale=10,
-        width=0.002,
-        cmap='winter'
-    )
-
-    # добавляем colorbar
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="5%", pad=0.05)
-    plt.colorbar(q, cax=cax, label='Скорость, м/с')
-    lines = []
-    for i in range(states.shape[1]):
-        lines.append(ax.plot([], [], color='red', linewidth=2, solid_capstyle='round')[0])
-
-    # инициализация линий для анимации
-    def init():
-        for line in lines:
-            line.set_data([],[])
-        return lines
-
-    # обновлении линий на каждой итерации
-    def update(frame):
-        ax.set_title('{}, мин'.format(frame*STEP//60))
-        for i, line in enumerate(lines):
-            line.set_data(states[0:frame, i, 0], states[0:frame, i, 1])
-        return lines
-
-    # cоздаем и сохраняем анимацию
-    ani = animation.FuncAnimation(
-        fig,
-        update,
-        frames=np.arange(NUM_ITER-1),
-        init_func=init,
-        interval=200,
-        blit=True,
-    )
-    ani.save(FILENAME, writer='imagemagick', dpi=200, bitrate=500)
-    print(FILENAME, 'created')
+    logger.info('Блок 3')
+    main_3()

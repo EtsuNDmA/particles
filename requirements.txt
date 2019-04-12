@@ -1,0 +1,8 @@
+scipy
+pandas
+xlrd
+matplotlib
+basemap-data-hires
+pyproj
+jupyter
+ffmpeg

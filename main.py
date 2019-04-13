@@ -1,6 +1,6 @@
 import os
-os.environ['PROJ_LIB'] = '/home/etsu/miniconda2/envs/particles/share/proj'
-
+# os.environ['PROJ_LIB'] = '/home/etsu/miniconda2/envs/particles/share/proj'
+os.environ['PROJ_LIB'] = 'C:\Anaconda\Library\share'
 import logging
 import pandas as pd
 from scipy.interpolate import LinearNDInterpolator
@@ -19,7 +19,7 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 # Зададим константы
-NUM_ITER = 24*4
+NUM_ITER = 24 * 4
 STEP = 3600  # с
 SEED = 42
 
@@ -151,14 +151,6 @@ def main_3():
     interpolate_current_velocity = LinearNDInterpolator(xy, current_velocity)
     # Получим типы точек
     point_types = get_point_types('Particles 2.xlsx')
-    # Добавим новые типы и сгенерируем заново цвета
-    new_point_types = point_types.copy()
-    new_point_types.index *= -1
-    new_point_types.number = 0
-    point_types = pd.concat([point_types, new_point_types], axis='rows')
-    point_types.reset_index(inplace=True)
-    point_types.color = type_colors(point_types.reset_index().type).values
-    point_types.set_index('type', inplace=True)
 
     logger.debug('Запускаем симуляцию')
     desintegrator = Desintegrator(Continent(bounds_lonlat, CONTINENT_BUFFER, LOCAL_CRS), STEP)

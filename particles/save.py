@@ -54,13 +54,22 @@ def save_animation(filename, lonlat, current_velocity, states, point_types, num_
         color = list(colors.iloc[point_ind])
         color[3] = 0.6  # прозрачность
         lines.append(ax.plot([], [], color=color, linestyle='', marker='o')[0])
-
+    # здесь пустые линии для отображения легенды
+#     for point_type, color in point_types.color.iteritems():
+#         ax.plot(0, 0, color=color, linestyle='', marker='o', label='Type %d' % point_type)
+    texts = [ax.text(0.85, 0.3 - 0.05*i,  'Тип %d' % (row.type),
+                     color = row.color,
+                     transform=ax.transAxes,
+                     horizontalalignment='left',
+                     verticalalignment='center'
+                    )
+             for i, row in point_types.reset_index().iterrows()]
     # инициализация линий для анимации
     def init():
         for line in lines:
             line.set_data([], [])
         return lines
-
+    
     # обновлении линий на каждой итерации
     def update(frame):
         logger.debug('Рисуем кадр %s / %s', frame, states.shape[0])
@@ -73,7 +82,7 @@ def save_animation(filename, lonlat, current_velocity, states, point_types, num_
                 y = np.nan
             line.set_data(x, y)
         return lines
-
+    
     # cоздадим и сохраним анимацию
     ani = animation.FuncAnimation(
         fig,
@@ -81,6 +90,7 @@ def save_animation(filename, lonlat, current_velocity, states, point_types, num_
         frames=num_iter - 1,
         init_func=init,
         interval=100,
+        blit=True,
     )
     ani.save(filename, writer=animation.FFMpegFileWriter(bitrate=-1))
     logger.debug('Создан файл %s' % filename)

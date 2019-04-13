@@ -1,5 +1,6 @@
+__pycache__
 */*.log
-*/.ipynb_checkpoints
+.ipynb_checkpoints
 */send
 */.idea
 **/*.asv
